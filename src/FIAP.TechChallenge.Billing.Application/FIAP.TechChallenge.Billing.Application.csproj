@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../FIAP.TechChallenge.Billing.Domain/FIAP.TechChallenge.Billing.Domain.csproj" />
+    <ProjectReference Include="../FIAP.TechChallenge.Billing.Application.Messaging/FIAP.TechChallenge.Billing.Application.Messaging.csproj" />
+    <PackageReference Include="Maieru.FiapTechChallenge.Chassis" Version="1.1.1" />
+  </ItemGroup>
+</Project>

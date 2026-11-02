@@ -1,0 +1,1 @@
+namespace FIAP.TechChallenge.Billing.Application.Messaging; public static class BillingMessaging { public const string Topic = "oficina.billing.events.v1"; public const int Version = 1; }

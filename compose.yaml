@@ -1,0 +1,73 @@
+name: fiap-billing
+services:
+  kafka:
+    image: apache/kafka:4.1.0
+    hostname: kafka
+    ports:
+      - "127.0.0.1:19094:9094"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:9092,EXTERNAL://:9094,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://127.0.0.1:19094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes:
+      - billing_kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+  kafka-init:
+    image: apache/kafka:4.1.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic oficina.os.billing.requests.v1 --partitions 1 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic oficina.billing.events.v1 --partitions 1 --replication-factor 1
+    restart: "no"
+  billing-database:
+    image: postgres:18.3
+    environment:
+      POSTGRES_DB: fiap_billing
+      POSTGRES_USER: fiap_billing
+      POSTGRES_PASSWORD: ${BILLING_DB_PASSWORD:?Preencha BILLING_DB_PASSWORD}
+    volumes:
+      - billing_postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fiap_billing -d fiap_billing"]
+      interval: 5s
+      retries: 20
+  billing-api:
+    image: ${BILLING_IMAGE:-fiap-billing:local}
+    ports:
+      - "127.0.0.1:8083:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_HTTP_PORTS: 8080
+      Database__ApplyMigrations: "true"
+      ConnectionStrings__DefaultConnection: Host=billing-database;Database=fiap_billing;Username=fiap_billing;Password=${BILLING_DB_PASSWORD:?Preencha BILLING_DB_PASSWORD}
+      Kafka__BootstrapServers: kafka:9092
+      Jwt__Issuer: ${JWT_ISSUER:?Preencha JWT_ISSUER}
+      Jwt__Audience: ${JWT_AUDIENCE:?Preencha JWT_AUDIENCE}
+      Jwt__SigningKey: ${JWT_SIGNING_KEY:?Preencha JWT_SIGNING_KEY}
+    depends_on:
+      billing-database:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    restart: "no"
+volumes:
+  billing_postgres_data:
+  billing_kafka_data:
