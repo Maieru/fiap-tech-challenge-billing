@@ -26,6 +26,8 @@ namespace FIAP.TechChallenge.Billing.Tests.Integration;
 [NonParallelizable]
 public class BillingIntegrationTests
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
     private PostgreSqlContainer postgres = null!; private KafkaContainer kafka = null!;
     private readonly string key = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"); private string? previous;
     [OneTimeSetUp]
@@ -55,7 +57,7 @@ public class BillingIntegrationTests
     {
         using var producer = new ProducerBuilder<string, string>(new ProducerConfig { BootstrapServers = kafka.GetBootstrapAddress(), Acks = Acks.All }).Build();
         var envelope = new MessageEnvelope<PagamentoSolicitado>(mid, PagamentoSolicitado.Type, 1, DateTimeOffset.UtcNow, "billing-test", null, null, null, request);
-        return await producer.ProduceAsync(OSMessaging.BillingTopic, new Message<string, string> { Key = request.OrdemServicoId.ToString("D"), Value = JsonSerializer.Serialize(envelope, new JsonSerializerOptions(JsonSerializerDefaults.Web)) });
+        return await producer.ProduceAsync(OSMessaging.BillingTopic, new Message<string, string> { Key = request.OrdemServicoId.ToString("D"), Value = JsonSerializer.Serialize(envelope, JsonOptions) });
     }
     [TestCase(true)]
     [TestCase(false)]

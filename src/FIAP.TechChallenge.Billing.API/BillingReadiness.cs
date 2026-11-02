@@ -2,6 +2,9 @@ using FIAP.TechChallenge.Billing.Infrastructure.Persistence;
 using FIAP.TechChallenge.Billing.Infrastructure.Messaging;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Confluent.Kafka;
+
+namespace FIAP.TechChallenge.Billing.API;
+
 public sealed class BillingReadiness(BillingDbContext db, ConsumerState state, IConfiguration config) : IHealthCheck
 {
     public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)

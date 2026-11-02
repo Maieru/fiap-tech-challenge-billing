@@ -1,3 +1,4 @@
+using FIAP.TechChallenge.Billing.API;
 using FIAP.TechChallenge.Billing.API.Security;
 using FIAP.TechChallenge.Billing.Application;
 using FIAP.TechChallenge.Billing.Infrastructure;
@@ -22,4 +23,3 @@ app.MapControllers();
 app.MapChassisHealthChecks("/api/billing/v1/health");
 if (app.Environment.IsDevelopment() || app.Environment.IsEnvironment("Testing")) { _ = app.MapOpenApi(); _ = app.MapScalarApiReference(); }
 await app.RunAsync();
-public partial class Program { }

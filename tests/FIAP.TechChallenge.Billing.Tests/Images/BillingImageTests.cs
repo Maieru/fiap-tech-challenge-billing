@@ -15,6 +15,8 @@ namespace FIAP.TechChallenge.Billing.Tests.Images;
 
 public class BillingImageTests
 {
+    private static readonly string[] Topics = ["oficina.os.billing.requests.v1", "oficina.billing.events.v1"];
+
     [TestCase("unsupported"), Category("ContainerImage")]
     [TestCase("missing-valor")]
     public async Task ImageSupportsJwtPersistenceOpenApiAndStopsOnInvalidMessage(string invalidKind)
@@ -25,7 +27,7 @@ public class BillingImageTests
         await using var kafka = new KafkaBuilder("confluentinc/cp-kafka:7.9.2").WithKRaft().WithNetwork(network).WithNetworkAliases("kafka").WithListener("kafka:19092").Build();
         await Task.WhenAll(db.StartAsync(), kafka.StartAsync());
         using var admin = new AdminClientBuilder(new AdminClientConfig { BootstrapServers = kafka.GetBootstrapAddress() }).Build();
-        await admin.CreateTopicsAsync(new[] { "oficina.os.billing.requests.v1", "oficina.billing.events.v1" }.Select(t => new TopicSpecification { Name = t, NumPartitions = 1, ReplicationFactor = 1 }));
+        await admin.CreateTopicsAsync(Topics.Select(t => new TopicSpecification { Name = t, NumPartitions = 1, ReplicationFactor = 1 }));
         var connection = new System.Data.Common.DbConnectionStringBuilder { ConnectionString = db.GetConnectionString() }; connection["Host"] = "postgres"; connection["Port"] = 5432;
         var key = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"); var group = "billing-image-" + Guid.NewGuid().ToString("N");
         await using var api = new ContainerBuilder(image).WithNetwork(network).WithPortBinding(8080, true)
