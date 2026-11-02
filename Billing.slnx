@@ -1,0 +1,11 @@
+<Solution>
+  <Project Path="src/FIAP.TechChallenge.Billing.Domain/FIAP.TechChallenge.Billing.Domain.csproj" />
+  <Project Path="src/FIAP.TechChallenge.Billing.Application/FIAP.TechChallenge.Billing.Application.csproj" />
+  <Project Path="src/FIAP.TechChallenge.Billing.Application.Messaging/FIAP.TechChallenge.Billing.Application.Messaging.csproj" />
+  <Project Path="src/FIAP.TechChallenge.Billing.Infrastructure/FIAP.TechChallenge.Billing.Infrastructure.csproj" />
+  <Project Path="src/FIAP.TechChallenge.Billing.API/FIAP.TechChallenge.Billing.API.csproj" />
+  <Folder Name="/Tests/">
+    <Project Path="tests/FIAP.TechChallenge.Billing.Application.Messaging.Tests/FIAP.TechChallenge.Billing.Application.Messaging.Tests.csproj" />
+    <Project Path="tests/FIAP.TechChallenge.Billing.Tests/FIAP.TechChallenge.Billing.Tests.csproj" />
+  </Folder>
+</Solution>

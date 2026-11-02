@@ -1,0 +1,7 @@
+.git
+**/bin
+**/obj
+.env
+artifacts/**
+!artifacts/packages/
+!artifacts/packages/**

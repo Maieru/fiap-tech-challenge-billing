@@ -1,0 +1,1 @@
+<RunSettings><DataCollectionRunSettings><DataCollectors><DataCollector friendlyName="XPlat Code Coverage"><Configuration><Exclude>[*.Tests]*</Exclude><ExcludeByFile>**/Migrations/**,**/*.g.cs,**/*.generated.cs</ExcludeByFile></Configuration></DataCollector></DataCollectors></DataCollectionRunSettings></RunSettings>
