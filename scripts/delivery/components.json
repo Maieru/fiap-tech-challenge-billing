@@ -5,6 +5,7 @@
     "context": ".",
     "dockerfile": "Dockerfile",
     "manifests": "k8s",
-    "namespace": "fiap-billing"
+    "namespace": "fiap-billing",
+    "repository": "Maieru/fiap-tech-challenge-billing"
   }
 }

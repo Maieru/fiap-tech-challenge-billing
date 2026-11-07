@@ -1,5 +1,7 @@
 # Billing
 
+> Operação AWS atual: ciclo completo centralizado em `manage-platform.yml` no repositório principal. Bancos gerenciados (RDS/DocumentDB), Kafka no EKS, segredos e migrations são provisionados pelo fluxo. Instruções antigas de ações manuais/pré-requisitos avulsos abaixo são históricas; seguir o [guia operacional](https://github.com/Maieru/fiap-tech-challenge/blob/main/docs/operacao/plataforma-aws.md). A aplicação remota ainda exige publicação coordenada, transição e bootstrap.
+
 Serviço .NET 10 de cobranças, PostgreSQL exclusivo e Kafka. O gateway é `IPaymentGateway`; `MockPaymentGateway` aprova imediatamente sem chamadas externas. Não há Mercado Pago real, estorno ou cancelamento administrativo após aprovação.
 
 ## Fluxo

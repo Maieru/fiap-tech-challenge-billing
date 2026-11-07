@@ -7,6 +7,15 @@ using Maieru.FiapTechChallenge.Chassis;
 using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
 var builder = WebApplication.CreateBuilder(args);
+if (args.Contains("--migrate-only", StringComparer.Ordinal))
+{
+    var options = new DbContextOptionsBuilder<BillingDbContext>().UseNpgsql(
+        builder.Configuration.GetConnectionString("DefaultConnection")
+        ?? throw new InvalidOperationException("Configure ConnectionStrings:DefaultConnection.")).Options;
+    await using var database = new BillingDbContext(options);
+    await database.Database.MigrateAsync();
+    return;
+}
 builder.AddChassis(new ChassisOptions { ServiceName = "oficina-billing", EnableOtlp = builder.Configuration.GetValue<bool>("Observability:EnableOtlp") });
 builder.Services.AddOpenApi();
 builder.Services.AddJwtAuthentication();
