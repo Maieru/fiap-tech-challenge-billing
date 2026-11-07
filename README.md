@@ -1,5 +1,7 @@
 # Billing
 
+> Operação AWS atual: ciclo completo centralizado em `manage-platform.yml` no repositório principal. Bancos gerenciados (RDS/DocumentDB), Kafka no EKS, segredos e migrations são provisionados pelo fluxo. Instruções antigas de ações manuais/pré-requisitos avulsos abaixo são históricas; seguir o [guia operacional](https://github.com/Maieru/fiap-tech-challenge/blob/main/docs/operacao/plataforma-aws.md). A aplicação remota ainda exige publicação coordenada, transição e bootstrap.
+
 Serviço .NET 10 de cobranças, PostgreSQL exclusivo e Kafka. O gateway é `IPaymentGateway`; `MockPaymentGateway` aprova imediatamente sem chamadas externas. Não há Mercado Pago real, estorno ou cancelamento administrativo após aprovação.
 
 ## Fluxo
@@ -28,6 +30,12 @@ Copie `.env.example` para `.env` e preencha senha do banco e JWT. `docker compos
 JWT exige issuer/audience e `Jwt__SigningKey` de pelo menos 32 bytes, exclusivamente por variável de ambiente. Fora do Compose configure `ConnectionStrings__DefaultConnection`, `Kafka__BootstrapServers`, `Jwt__Issuer`, `Jwt__Audience`, `Jwt__SigningKey`. `Database__ApplyMigrations=true` aplica migrations ao iniciar (ambiente de demonstração).
 
 GET autenticados: `/api/billing/v1/cobrancas`, `/api/billing/v1/cobrancas/{id}` e `/api/billing/v1/ordens/{ordemServicoId}/cobranca`. Lista aceita `ordemServicoId`, `situacao`, `pageNumber=1`, `pageSize=10` (máximo 100). Criação somente por Kafka. OpenAPI `/openapi/v1.json` e Scalar `/scalar/v1` em Development/Testing. Health em `/api/billing/v1/health/live` e `/ready`, incluindo banco, consumidor e broker.
+
+## Kubernetes / EKS
+
+As Actions manuais [publish-image.yml e deploy-eks.yml](scripts/delivery/README.md) publicam no ECR e aplicam os manifestos no EKS, em main com CI aprovado. A publicação usa tag por commit e o deploy usa digest; configure as roles OIDC e variáveis conforme o guia.
+
+Os [manifestos e o roteiro manual](k8s/README.md) configuram HTTP interno 8080, HPA de 1 a 3 réplicas, credencial PostgreSQL exclusiva e OTLP ativo para o Collector compartilhado. Namespace/SecretStore pertencem ao Infra. As migrations devem ser aplicadas antes do rollout; `Database__ApplyMigrations=false` nas réplicas. Bancos, Kafka, segredos/IAM, imagens e deploy são etapas externas.
 
 ## Falhas e reconciliação
 
