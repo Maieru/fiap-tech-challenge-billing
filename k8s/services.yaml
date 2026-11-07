@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: fiap-billing-service
+  namespace: fiap-billing
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: fiap-billing
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

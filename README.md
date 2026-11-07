@@ -29,6 +29,12 @@ JWT exige issuer/audience e `Jwt__SigningKey` de pelo menos 32 bytes, exclusivam
 
 GET autenticados: `/api/billing/v1/cobrancas`, `/api/billing/v1/cobrancas/{id}` e `/api/billing/v1/ordens/{ordemServicoId}/cobranca`. Lista aceita `ordemServicoId`, `situacao`, `pageNumber=1`, `pageSize=10` (máximo 100). Criação somente por Kafka. OpenAPI `/openapi/v1.json` e Scalar `/scalar/v1` em Development/Testing. Health em `/api/billing/v1/health/live` e `/ready`, incluindo banco, consumidor e broker.
 
+## Kubernetes / EKS
+
+As Actions manuais [publish-image.yml e deploy-eks.yml](scripts/delivery/README.md) publicam no ECR e aplicam os manifestos no EKS, em main com CI aprovado. A publicação usa tag por commit e o deploy usa digest; configure as roles OIDC e variáveis conforme o guia.
+
+Os [manifestos e o roteiro manual](k8s/README.md) configuram HTTP interno 8080, HPA de 1 a 3 réplicas, credencial PostgreSQL exclusiva e OTLP ativo para o Collector compartilhado. Namespace/SecretStore pertencem ao Infra. As migrations devem ser aplicadas antes do rollout; `Database__ApplyMigrations=false` nas réplicas. Bancos, Kafka, segredos/IAM, imagens e deploy são etapas externas.
+
 ## Falhas e reconciliação
 
 Persistir → publicar → commit não é atômico entre PostgreSQL e Kafka. O gateway também pode ter concluído antes de falhar a transação. O mock é determinístico; uma integração real deverá respeitar a mesma chave de idempotência. Mensagem órfã ou entrega incerta exige verificar produtor, consumidor e log Kafka, corrigir a causa e reiniciar no mesmo grupo. Preservar envelope e chave no reenvio. Não avançar offsets silenciosamente nem presumir que houve rollback externo.

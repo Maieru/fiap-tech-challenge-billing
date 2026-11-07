@@ -1,0 +1,10 @@
+{
+  "billing": {
+    "ci": "ci.yml",
+    "ecr": "fiap-ecr-billing-repository",
+    "context": ".",
+    "dockerfile": "Dockerfile",
+    "manifests": "k8s",
+    "namespace": "fiap-billing"
+  }
+}
