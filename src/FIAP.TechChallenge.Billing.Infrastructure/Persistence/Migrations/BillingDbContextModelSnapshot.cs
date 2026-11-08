@@ -28,14 +28,23 @@ namespace FIAP.TechChallenge.Billing.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<string>("CheckoutUrl")
+                        .HasColumnType("text");
+
                     b.Property<Guid>("ClienteId")
                         .HasColumnType("uuid");
 
                     b.Property<DateTimeOffset?>("ConcluidaEmUtc")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("CorrelationId")
+                        .HasColumnType("text");
+
                     b.Property<DateTimeOffset>("CriadaEmUtc")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("GatewayOrderId")
+                        .HasColumnType("text");
 
                     b.Property<string>("GatewayPaymentId")
                         .HasColumnType("text");
@@ -54,8 +63,17 @@ namespace FIAP.TechChallenge.Billing.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("OrdemServicoId")
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("PaymentRequestMessageId")
+                        .HasColumnType("uuid");
+
                     b.Property<int>("Situacao")
                         .HasColumnType("integer");
+
+                    b.Property<string>("TraceParent")
+                        .HasColumnType("text");
+
+                    b.Property<string>("TraceState")
+                        .HasColumnType("text");
 
                     b.Property<decimal>("Valor")
                         .HasColumnType("numeric");

@@ -56,6 +56,8 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_HTTP_PORTS: 8080
+      MercadoPago__AccessToken: ${MERCADO_PAGO_ACCESS_TOKEN:-}
+      MercadoPago__WebhookSecret: ${MERCADO_PAGO_WEBHOOK_SECRET:-}
       Database__ApplyMigrations: "true"
       ConnectionStrings__DefaultConnection: Host=billing-database;Database=fiap_billing;Username=fiap_billing;Password=${BILLING_DB_PASSWORD:?Preencha BILLING_DB_PASSWORD}
       Kafka__BootstrapServers: kafka:9092

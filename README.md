@@ -2,13 +2,23 @@
 
 > Operação AWS atual: ciclo completo centralizado em `manage-platform.yml` no repositório principal. Bancos gerenciados (RDS/DocumentDB), Kafka no EKS, segredos e migrations são provisionados pelo fluxo. Instruções antigas de ações manuais/pré-requisitos avulsos abaixo são históricas; seguir o [guia operacional](https://github.com/Maieru/fiap-tech-challenge/blob/main/docs/operacao/plataforma-aws.md). A aplicação remota ainda exige publicação coordenada, transição e bootstrap.
 
-Serviço .NET 10 de cobranças, PostgreSQL exclusivo e Kafka. O gateway é `IPaymentGateway`; `MockPaymentGateway` aprova imediatamente sem chamadas externas. Não há Mercado Pago real, estorno ou cancelamento administrativo após aprovação.
+Serviço .NET 10 de cobranças, PostgreSQL exclusivo e Kafka. `MercadoPagoPaymentGateway` cria um checkout hospedado e mantém a cobrança pendente até receber o webhook validado. Valor zero é confirmado sem chamada externa. Estorno e novas tentativas após recusa ficam fora deste fluxo.
 
 ## Fluxo
 
 OS preserva o total e MessageId do diagnóstico como referência do orçamento. Aprovação administrativa retorna 202 e publica `os.pagamento-solicitado` em `oficina.os.billing.requests.v1`. Billing publica `billing.pagamento-confirmado` ou `billing.pagamento-recusado` em `oficina.billing.events.v1`. Só a confirmação faz OS publicar `os.execucao-autorizada`. Recusa aciona cancelamento no Execution e devolução de estoque; a aprovação original permanece no histórico.
 
-Uma cobrança por ordem, valor decimal BRL preservado inclusive zero. A chave de idempotência do gateway é o UUID da ordem. O grupo Billing é `oficina-billing-v1`. Consumidores confirmam offsets após commit e encerram em falha, sem retry de aplicação ou DLQ.
+Uma cobrança por ordem, valor decimal BRL preservado inclusive zero, sem arredondamento. A chave de idempotência e external_reference do gateway são o UUID da ordem. O grupo Billing é `oficina-billing-v1`. Consumidores confirmam offsets após commit e encerram em falha, sem retry de aplicação ou DLQ. A criação do checkout não publica confirmação/recusa. O webhook conclui sob bloqueio por ordem e publica o evento existente com MessageId igual ao ID da cobrança.
+
+## Mercado Pago e credenciais
+
+No repositório principal `Maieru/fiap-tech-challenge`, cadastrar em **Settings → Secrets and variables → Actions** os secrets `MERCADO_PAGO_ACCESS_TOKEN` e `MERCADO_PAGO_WEBHOOK_SECRET` da aplicação de teste. Não enviar os valores em issues, logs ou arquivos versionados. Não é necessária Public Key para abrir o checkout por link.
+
+`manage-platform.yml` verifica a presença de ambos e os encaminha explicitamente ao estágio `aws-resources`. Terraform cria `fiap-billing-mercadopago-credentials`; um passo AWS CLI grava o JSON usando arquivo temporário e remove o arquivo ao final. Os valores não passam pelo Terraform. A role do External Secrets do Billing lê esse segredo e injeta `MercadoPago__AccessToken` e `MercadoPago__WebhookSecret` no pod. O deploy aguarda a sincronização e sua anotação de execução provoca novo rollout, inclusive ao reutilizar a imagem. Para trocar credenciais, atualizar os GitHub Secrets e executar `manage-platform.yml` com `apply` novamente. `destroy` não exige credenciais Mercado Pago.
+
+Após o deploy, cadastrar no painel Webhooks da aplicação Mercado Pago, no ambiente de teste, a URL HTTPS `<api_endpoint>/api/billing/v1/webhooks/mercadopago` para notificações de orders do Checkout Pro. O segredo de assinatura desse painel deve ser o mesmo cadastrado no GitHub. A API é `https://api.mercadopago.com`; usar credenciais e comprador/cartão de teste. Abrir uma ordem nova, aprovar seu orçamento, aguardar a cobrança pendente e abrir o link no detalhe administrativo. Após pagar, conferir a confirmação e a autorização da execução. Retornos do navegador não confirmam pagamentos.
+
+O webhook não exige JWT: autentica a assinatura HMAC-SHA256 de `data.id`, `x-request-id` e `ts` de `x-signature`, consulta a order e confere referência/ID/valor/moeda. Responde 401 para assinatura inválida e 503 para falha de processamento ou cobrança ainda indisponível, permitindo reentrega. Notificações repetidas ou atrasadas não alteram cobrança concluída. `processed/accredited` confirma; `failed` e `canceled` recusam; outros estados aguardam. `GatewayPaymentId` armazena o ID da order Mercado Pago.
 
 ## Pacotes candidatos e build
 
@@ -25,7 +35,7 @@ O Dockerfile aceita candidatos em `artifacts/packages` e restaura do NuGet públ
 
 ## Execução
 
-Copie `.env.example` para `.env` e preencha senha do banco e JWT. `docker compose up -d` usa a imagem `fiap-billing:local`, API em loopback 8083 e broker 19094, volumes exclusivos. `docker compose down` preserva dados. O Compose integrado do Execution inclui as três APIs com broker compartilhado; preencha também BILLING_DB_PASSWORD e forneça as três imagens prontas.
+Copie `.env.example` para `.env` e preencha senha do banco, JWT e credenciais Mercado Pago de teste. `docker compose up -d` usa a imagem `fiap-billing:local`, API em loopback 8083 e broker 19094, volumes exclusivos. `docker compose down` preserva dados. O Compose integrado do Execution inclui as três APIs com broker compartilhado; preencha também BILLING_DB_PASSWORD e forneça as três imagens prontas. Webhooks externos precisam da URL HTTPS acessível da aplicação; o endereço loopback do Compose não é público.
 
 JWT exige issuer/audience e `Jwt__SigningKey` de pelo menos 32 bytes, exclusivamente por variável de ambiente. Fora do Compose configure `ConnectionStrings__DefaultConnection`, `Kafka__BootstrapServers`, `Jwt__Issuer`, `Jwt__Audience`, `Jwt__SigningKey`. `Database__ApplyMigrations=true` aplica migrations ao iniciar (ambiente de demonstração).
 
@@ -39,7 +49,7 @@ Os [manifestos e o roteiro manual](k8s/README.md) configuram HTTP interno 8080, 
 
 ## Falhas e reconciliação
 
-Persistir → publicar → commit não é atômico entre PostgreSQL e Kafka. O gateway também pode ter concluído antes de falhar a transação. O mock é determinístico; uma integração real deverá respeitar a mesma chave de idempotência. Mensagem órfã ou entrega incerta exige verificar produtor, consumidor e log Kafka, corrigir a causa e reiniciar no mesmo grupo. Preservar envelope e chave no reenvio. Não avançar offsets silenciosamente nem presumir que houve rollback externo.
+Persistir → publicar → commit não é atômico entre PostgreSQL e Kafka. A criação externa pode ter concluído antes do rollback local: a reentrega reutiliza a mesma chave de idempotência. Na conclusão, falha de commit depois da publicação pode repetir o evento; o MessageId permanece estável para deduplicação. Mensagem órfã ou entrega incerta exige verificar produtor, consumidor e log Kafka, corrigir a causa e reiniciar no mesmo grupo. Preservar envelope e chave no reenvio. Não avançar offsets silenciosamente nem presumir que houve rollback externo.
 
 A migração é aditiva e não cobra ordens antigas. Ordens sem referência e total de orçamento não podem iniciar pagamento. Para demonstração use ordens novas; drene autorizações antigas antes de trocar as imagens. Não faça downgrade com Sagas em andamento.
 
@@ -49,7 +59,7 @@ BDD: no repositório Execution, configure OS_TEST_IMAGE, EXECUTION_TEST_IMAGE e 
 
 - `Domain/Entities`, `Enums` e `Interfaces`: cobrança, situação e contrato de consulta.
 - `Application/UseCases/Cobrancas/<Operacao>`: caso de uso, interface e command por operação; listagem também tem response próprio. `Abstractions` contém a persistência transacional e `Gateways` contém o contrato de pagamento e seus DTOs.
-- `Infrastructure/Persistence`: contexto, entidades técnicas, migrations e repositórios; `Messaging` contém o consumidor Kafka; `Payments` contém o mock do gateway.
+- `Infrastructure/Persistence`: contexto, entidades técnicas, migrations e repositórios; `Messaging` contém o consumidor Kafka; `Payments` contém o gateway HTTP Mercado Pago e a validação de assinatura.
 - `API/Controllers`: rotas de cobrança delegando aos casos de uso. `Program` compõe o host com `AddApplication` e `AddInfrastructure`.
 - Os testes permanecem na pasta `Tests` da solução, organizados por domínio, infraestrutura, integração e imagens dentro do projeto existente.
 

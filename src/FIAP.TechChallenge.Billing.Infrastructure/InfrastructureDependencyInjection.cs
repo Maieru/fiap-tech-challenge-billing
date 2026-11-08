@@ -21,7 +21,16 @@ public static class InfrastructureDependencyInjection
         services.AddDbContext<BillingDbContext>(o => o.UseNpgsql(configuration.GetConnectionString("DefaultConnection")));
         services.AddScoped<IBillingStore>(sp => sp.GetRequiredService<BillingDbContext>());
         services.AddScoped<ICobrancaQueryRepository, CobrancaQueryRepository>();
-        services.AddSingleton<IPaymentGateway, MockPaymentGateway>();
+        services.AddHttpClient<IPaymentGateway, MercadoPagoPaymentGateway>((sp, http) =>
+        {
+            // A different endpoint is allowed only for isolated HTTP fixtures in Testing.
+            var testUrl = configuration["MercadoPago:BaseUrl"];
+            if (testUrl is not null && !sp.GetRequiredService<IHostEnvironment>().IsEnvironment("Testing"))
+                throw new InvalidOperationException("MercadoPago:BaseUrl só pode ser alterada em Testing.");
+            http.BaseAddress = new Uri(testUrl ?? "https://api.mercadopago.com/");
+            http.Timeout = TimeSpan.FromSeconds(8);
+        });
+        services.AddSingleton<MercadoPagoWebhookSignature>();
         services.AddSingleton<IProducer<string, string>>(_ => new ProducerBuilder<string, string>(new ProducerConfig { BootstrapServers = configuration["Kafka:BootstrapServers"], ClientId = "oficina-billing", EnableIdempotence = true, Acks = Acks.All, MessageTimeoutMs = 10000 }).Build());
         services.AddSingleton<IMessagingService, KafkaMessagingService>();
         services.AddSingleton<ConsumerState>();

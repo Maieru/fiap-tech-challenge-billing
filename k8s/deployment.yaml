@@ -47,6 +47,16 @@ spec:
             - configMapRef:
                 name: fiap-billing-config
           env:
+            - name: MercadoPago__AccessToken
+              valueFrom:
+                secretKeyRef:
+                  name: fiap-billing-mercadopago-credentials
+                  key: MercadoPago__AccessToken
+            - name: MercadoPago__WebhookSecret
+              valueFrom:
+                secretKeyRef:
+                  name: fiap-billing-mercadopago-credentials
+                  key: MercadoPago__WebhookSecret
             - name: ConnectionStrings__DefaultConnection
               valueFrom:
                 secretKeyRef:
