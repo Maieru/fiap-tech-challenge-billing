@@ -64,6 +64,28 @@ public class MercadoPagoPaymentGatewayTests
         });
     }
 
+    [TestCase("created", PaymentStatus.Pending)]
+    [TestCase("processed", PaymentStatus.Pending)]
+    [TestCase("failed", PaymentStatus.Rejected)]
+    [TestCase("canceled", PaymentStatus.Rejected)]
+    public async Task HandlesOrderWithoutStatusDetail(string status, PaymentStatus expected)
+    {
+        var order = Guid.NewGuid();
+        // Shape observed from GET /v1/orders/{id} for a real test order before payment.
+        using var http = new HttpClient(new Handler(_ => Task.FromResult(Json(new
+        {
+            id = "ORDTST123", external_reference = order.ToString(), total_amount = "120.40", currency = "BRL", status
+        })))) { BaseAddress = new Uri("https://api.mercadopago.com/") };
+        var result = await new MercadoPagoPaymentGateway(http, Configuration()).GetOrderAsync("ORDTST123", default);
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(expected));
+            Assert.That(result.Motivo, Is.EqualTo(expected == PaymentStatus.Rejected ? status : null));
+            Assert.That(result.OrdemServicoId, Is.EqualTo(order));
+            Assert.That(result.Valor, Is.EqualTo(120.40m));
+        });
+    }
+
     [TestCase(401)]
     [TestCase(429)]
     [TestCase(500)]
