@@ -41,7 +41,8 @@ public sealed class MercadoPagoPaymentGateway(HttpClient http, IConfiguration co
         using var document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
         var root = document.RootElement;
         var status = root.GetProperty("status").GetString();
-        var detail = root.GetProperty("status_detail").GetString();
+        // Newly created orders can omit status_detail until a payment is attempted.
+        var detail = root.TryGetProperty("status_detail", out var statusDetail) ? statusDetail.GetString() : null;
         var state = (status, detail) switch
         {
             ("processed", "accredited") => PaymentStatus.Approved,

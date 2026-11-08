@@ -20,6 +20,10 @@ Após o deploy, cadastrar no painel Webhooks da aplicação Mercado Pago, no amb
 
 O webhook não exige JWT: autentica a assinatura HMAC-SHA256 de `data.id`, `x-request-id` e `ts` de `x-signature`, consulta a order e confere referência/ID/valor/moeda. Responde 401 para assinatura inválida e 503 para falha de processamento ou cobrança ainda indisponível, permitindo reentrega. Notificações repetidas ou atrasadas não alteram cobrança concluída. `processed/accredited` confirma; `failed` e `canceled` recusam; outros estados aguardam. `GatewayPaymentId` armazena o ID da order Mercado Pago.
 
+Orders em `created` podem omitir `status_detail`; a consulta mantém essas cobranças pendentes. A confirmação continua exigindo `processed/accredited`. Em 2026-11-08, a consulta a duas orders de teste confirmou esse formato e motivou uma correção de leitura com quatro testes de regressão.
+
+Se o checkout informar que uma das partes é de teste, verificar também o usuário/e-mail do comprador, mesmo em guia anônima. Para eliminar mistura com conta real, criar uma conta **Comprador** de teste no Brasil pelo painel da aplicação e usar seus dados no checkout, conforme a [documentação de contas de teste](https://www.mercadopago.com.br/developers/pt/docs/checkout-pro-orders/resources/your-integrations/test/accounts?scope=prod). O Access Token de teste desta integração pode começar com `APP_USR`; o prefixo sozinho não identifica produção.
+
 ## Pacotes candidatos e build
 
 Os contratos OS 0.2.0 e Billing 0.1.0 devem ser publicados antes dos builds independentes em CI. Não foram publicados automaticamente nesta implementação. Para revisar antes da publicação:
