@@ -11,6 +11,7 @@ public static class ApplicationDependencyInjection
     {
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<IProcessarPagamentoUseCase, ProcessarPagamentoUseCase>();
+        services.AddScoped<UseCases.Cobrancas.AtualizarPagamento.IAtualizarPagamentoUseCase, UseCases.Cobrancas.AtualizarPagamento.AtualizarPagamentoUseCase>();
         services.AddScoped<IListarCobrancasUseCase, ListarCobrancasUseCase>();
         services.AddScoped<IRecuperarCobrancaUseCase, RecuperarCobrancaUseCase>();
         services.AddScoped<IRecuperarCobrancaPorOrdemUseCase, RecuperarCobrancaPorOrdemUseCase>();

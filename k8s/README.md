@@ -9,3 +9,7 @@ Os YAMLs fonte contêm placeholders intencionais. scripts/delivery renderiza có
 HTTP interno 8080; entrada pública via frontend/Nginx e API Gateway. Readiness verifica dependências. OTLP segue ao Collector compartilhado, sem licença New Relic nas APIs.
 
 A action central cria bancos, Kafka/tópicos e segredos; esses recursos não são provisões manuais avulsas. Consultar o [guia operacional](https://github.com/Maieru/fiap-tech-challenge/blob/main/docs/operacao/plataforma-aws.md) para ativação, variables/secrets e destruição diária de dados.
+
+## Credenciais Mercado Pago
+
+O manifesto `external-secrets.yaml` também sincroniza `fiap-billing-mercadopago-credentials`, provisionado pelo fluxo central com os GitHub Secrets `MERCADO_PAGO_ACCESS_TOKEN` e `MERCADO_PAGO_WEBHOOK_SECRET`. O pod recebe somente referências às propriedades `MercadoPago__AccessToken` e `MercadoPago__WebhookSecret`. O deploy existente aguarda nova sincronização de todos os ExternalSecrets antes do rollout. Atualização de credenciais exige executar novamente o fluxo central `apply` para gravar os novos valores e reiniciar os pods com a anotação de execução do deploy.

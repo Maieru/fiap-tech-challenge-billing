@@ -76,6 +76,19 @@ test("origem e CI usam o repositorio do servico mesmo com chamador central", () 
   assert.deepEqual(actual, { repository: config.repository, revision: "b".repeat(40) });
   assert.throws(() => sourceContext(config, { SOURCE_SHA: "main" }));
 });
+
+test("Mercado Pago usa ExternalSecret e somente referencias no pod", () => {
+  const docs = render(component("billing"), digest, settings, "test");
+  const secret = docs.find(d => d.kind === "ExternalSecret" && d.metadata.name === "fiap-billing-mercadopago-credentials");
+  assert.deepEqual(secret.spec.data.map(d => d.secretKey), ["MercadoPago__AccessToken", "MercadoPago__WebhookSecret"]);
+  const container = docs.find(d => d.kind === "Deployment").spec.template.spec.containers[0];
+  for (const item of secret.spec.data) {
+    assert.equal(item.remoteRef.key, secret.metadata.name);
+    assert.equal(item.remoteRef.property, item.secretKey);
+    assert.deepEqual(container.env.find(e => e.name === item.secretKey).valueFrom.secretKeyRef, {name: secret.metadata.name, key: item.secretKey});
+  }
+  assert(!docs.filter(d => d.kind === "ConfigMap").some(d => Object.keys(d.data).some(k => k.startsWith("MercadoPago"))));
+});
 for (const name of Object.keys(definitions).filter(n => ["os", "billing"].includes(n))) {
   test(name + ": migration usa a mesma imagem e somente credencial PostgreSQL", () => {
     const deployment = render(component(name), digest, settings, "test").find(d => d.kind === "Deployment");

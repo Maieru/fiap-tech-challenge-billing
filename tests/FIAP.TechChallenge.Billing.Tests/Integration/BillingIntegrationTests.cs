@@ -3,8 +3,10 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using System.Security.Cryptography;
 using FIAP.TechChallenge.Billing.Application.Gateways;
 using FIAP.TechChallenge.Billing.Application.UseCases.Cobrancas.ProcessarPagamento;
+using FIAP.TechChallenge.Billing.Application.UseCases.Cobrancas.AtualizarPagamento;
 using FIAP.TechChallenge.Billing.Infrastructure.Persistence;
 using FIAP.TechChallenge.Billing.Infrastructure.Payments;
 using FIAP.TechChallenge.OS.Application.Messaging;
@@ -49,6 +51,7 @@ public class BillingIntegrationTests
             ["Kafka:BootstrapServers"] = kafka.GetBootstrapAddress(),
             ["Jwt:Issuer"] = "billing-tests",
             ["Jwt:Audience"] = "billing-tests",
+            ["MercadoPago:WebhookSecret"] = "billing-webhook-tests",
             ["Logging:LogLevel:Default"] = "Warning"
         }));
         if (gateway is not null) b.ConfigureServices(s => { s.RemoveAll<IPaymentGateway>(); s.AddSingleton(gateway); });
@@ -83,6 +86,23 @@ public class BillingIntegrationTests
         }
         Assert.That((await client.GetAsync("/api/billing/v1/health/ready", timeout.Token)).StatusCode, Is.EqualTo(HttpStatusCode.OK));
         Assert.That(gateway.Calls, Is.EqualTo(1));
+        Assert.That(charge.GetProperty("situacao").GetInt32(), Is.Zero);
+        Assert.That(charge.GetProperty("checkoutUrl").GetString(), Is.Not.Empty);
+        Assert.That(CountResults(request.OrdemServicoId, timeout.Token), Is.Zero);
+        var externalId = charge.GetProperty("gatewayOrderId").GetString()!;
+        using (var invalid = await client.PostAsync($"/api/billing/v1/webhooks/mercadopago?data.id={externalId}&type=order", null))
+            Assert.That(invalid.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized));
+        async Task Notify()
+        {
+            using var notification = new HttpRequestMessage(HttpMethod.Post, $"/api/billing/v1/webhooks/mercadopago?data.id={externalId}&type=order");
+            notification.Headers.Add("x-request-id", "notification-test");
+            var hash = HMACSHA256.HashData(Encoding.UTF8.GetBytes("billing-webhook-tests"), Encoding.UTF8.GetBytes($"id:{externalId.ToLowerInvariant()};request-id:notification-test;ts:123;"));
+            notification.Headers.Add("x-signature", "ts=123,v1=" + Convert.ToHexStringLower(hash));
+            using var response = await client.SendAsync(notification, timeout.Token);
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        }
+        await Task.WhenAll(Notify(), Notify());
+        charge = await client.GetFromJsonAsync<JsonElement>($"/api/billing/v1/ordens/{request.OrdemServicoId}/cobranca", timeout.Token);
         Assert.That(CountResults(request.OrdemServicoId, timeout.Token), Is.EqualTo(1));
         var all = await client.GetFromJsonAsync<JsonElement>($"/api/billing/v1/cobrancas?ordemServicoId={request.OrdemServicoId}", timeout.Token);
         Assert.Multiple(() => { Assert.That(charge.GetProperty("valor").GetDecimal(), Is.EqualTo(12.345m)); Assert.That(charge.GetProperty("situacao").GetInt32(), Is.EqualTo(approved ? 1 : 2)); Assert.That(all.GetProperty("totalItems").GetInt32(), Is.EqualTo(1)); });
@@ -124,8 +144,8 @@ public class BillingIntegrationTests
             await using (var db = new BillingDbContext(options))
             using (var producer = new ProducerBuilder<string, string>(new ProducerConfig { BootstrapServers = failure == "publish" ? "127.0.0.1:1" : kafka.GetBootstrapAddress(), MessageTimeoutMs = 1000, Acks = Acks.All, EnableIdempotence = true }).Build())
             {
-                var useCase = new ProcessarPagamentoUseCase(db, failure == "gateway" ? new FailingGateway() : new MockPaymentGateway(), new Maieru.FiapTechChallenge.Messaging.Kafka.KafkaMessagingService(producer), TimeProvider.System);
-                Assert.That(async () => await useCase.ExecuteAsync(new(mid, "rollback-test", order, Guid.NewGuid(), Guid.NewGuid(), 10, "BRL"), default), Throws.Exception);
+                var useCase = new ProcessarPagamentoUseCase(db, new FailingGateway(), new Maieru.FiapTechChallenge.Messaging.Kafka.KafkaMessagingService(producer), TimeProvider.System);
+                Assert.That(async () => await useCase.ExecuteAsync(new(mid, "rollback-test", order, Guid.NewGuid(), Guid.NewGuid(), failure == "gateway" ? 10 : 0, "BRL"), default), Throws.Exception);
             }
             await using var verify = new BillingDbContext(options);
             Assert.Multiple(() => { Assert.That(verify.Cobrancas.Any(x => x.OrdemServicoId == order), Is.False); Assert.That(verify.MensagensProcessadas.Any(x => x.Id == mid), Is.False); });
@@ -161,11 +181,75 @@ public class BillingIntegrationTests
         Assert.ThrowsAsync<InvalidOperationException>(() => Process(11));
         Assert.That(gateway.Calls, Is.EqualTo(1));
     }
+
+    [TestCase("query")]
+    [TestCase("publish")]
+    [TestCase("commit")]
+    public async Task WebhookFailuresRollbackCompletionAndAllowRedelivery(string failure)
+    {
+        var options = new DbContextOptionsBuilder<BillingDbContext>().UseNpgsql(postgres.GetConnectionString()).Options;
+        var gateway = new CountingGateway();
+        var order = Guid.NewGuid();
+        using var producer = new ProducerBuilder<string, string>(new ProducerConfig { BootstrapServers = kafka.GetBootstrapAddress(), Acks = Acks.All }).Build();
+        var messaging = new Maieru.FiapTechChallenge.Messaging.Kafka.KafkaMessagingService(producer);
+        await using (var db = new BillingDbContext(options))
+        {
+            await db.Database.MigrateAsync();
+            await new ProcessarPagamentoUseCase(db, gateway, messaging, TimeProvider.System)
+                .ExecuteAsync(new(Guid.NewGuid(), "webhook-rollback", order, Guid.NewGuid(), Guid.NewGuid(), 10, "BRL"));
+        }
+        if (failure == "commit")
+        {
+            await using var db = new BillingDbContext(options);
+            await db.Database.ExecuteSqlRawAsync("CREATE OR REPLACE FUNCTION billing_test_update_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected commit failure'; END $$; CREATE CONSTRAINT TRIGGER billing_test_update AFTER UPDATE ON \"Cobrancas\" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION billing_test_update_failure();");
+        }
+        try
+        {
+            await using var db = new BillingDbContext(options);
+            using var failedProducer = new ProducerBuilder<string, string>(new ProducerConfig { BootstrapServers = failure == "publish" ? "127.0.0.1:1" : kafka.GetBootstrapAddress(), MessageTimeoutMs = 1000 }).Build();
+            var updater = new AtualizarPagamentoUseCase(db, failure == "query" ? new FailingGateway() : gateway,
+                new Maieru.FiapTechChallenge.Messaging.Kafka.KafkaMessagingService(failedProducer), TimeProvider.System);
+            Assert.That(async () => await updater.ExecuteAsync("ORD-" + order), Throws.Exception);
+        }
+        finally
+        {
+            if (failure == "commit")
+            {
+                await using var db = new BillingDbContext(options);
+                await db.Database.ExecuteSqlRawAsync("DROP TRIGGER billing_test_update ON \"Cobrancas\"; DROP FUNCTION billing_test_update_failure();");
+            }
+        }
+        Guid chargeId;
+        await using (var db = new BillingDbContext(options))
+        {
+            var charge = await db.Cobrancas.SingleAsync(x => x.OrdemServicoId == order);
+            chargeId = charge.Id;
+            Assert.That((int)charge.Situacao, Is.Zero);
+        }
+        await using (var db = new BillingDbContext(options))
+            await new AtualizarPagamentoUseCase(db, gateway, messaging, TimeProvider.System).ExecuteAsync("ORD-" + order);
+        await using (var db = new BillingDbContext(options))
+        {
+            var charge = await db.Cobrancas.SingleAsync(x => x.OrdemServicoId == order);
+            Assert.Multiple(() => { Assert.That((int)charge.Situacao, Is.EqualTo(1)); Assert.That(charge.Id, Is.EqualTo(chargeId)); });
+        }
+    }
     private sealed class CountingGateway(bool approved = true) : IPaymentGateway
     {
         public int Calls;
-        public async Task<PaymentResult> ChargeAsync(PaymentRequest request, CancellationToken ct)
-        { Interlocked.Increment(ref Calls); await Task.Delay(50, ct); return approved ? new(true, "mock-" + request.IdempotencyKey, null) : new(false, null, "recusado"); }
+        private PaymentRequest request = null!;
+        public async Task<CheckoutResult> CreateCheckoutAsync(PaymentRequest request, CancellationToken ct)
+        {
+            this.request = request;
+            Interlocked.Increment(ref Calls); await Task.Delay(50, ct);
+            return new("ORD-" + request.OrdemServicoId, "https://www.mercadopago.com.br/checkout/test");
+        }
+        public Task<PaymentOrder> GetOrderAsync(string id, CancellationToken ct) => Task.FromResult(new PaymentOrder(id,
+            request.OrdemServicoId, request.Valor, request.Moeda, approved ? PaymentStatus.Approved : PaymentStatus.Rejected, approved ? null : "recusado"));
     }
-    private sealed class FailingGateway : IPaymentGateway { public Task<PaymentResult> ChargeAsync(PaymentRequest r, CancellationToken ct) => throw new IOException("gateway unavailable"); }
+    private sealed class FailingGateway : IPaymentGateway
+    {
+        public Task<CheckoutResult> CreateCheckoutAsync(PaymentRequest r, CancellationToken ct) => throw new IOException("gateway unavailable");
+        public Task<PaymentOrder> GetOrderAsync(string id, CancellationToken ct) => throw new IOException("gateway unavailable");
+    }
 }

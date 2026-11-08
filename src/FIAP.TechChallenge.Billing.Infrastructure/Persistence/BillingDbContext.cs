@@ -23,10 +23,11 @@ public sealed class BillingDbContext(DbContextOptions<BillingDbContext> options)
         await Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock(hashtextextended({id.ToString()}, 0))", ct);
         return await Cobrancas.SingleOrDefaultAsync(x => x.OrdemServicoId == id, ct);
     }
-    public async Task SaveAsync(Cobranca cobranca, Guid messageId, CancellationToken ct)
+    public async Task SaveAsync(Cobranca cobranca, Guid? messageId, CancellationToken ct)
     {
         if (Entry(cobranca).State == EntityState.Detached) Cobrancas.Add(cobranca);
-        MensagensProcessadas.Add(new() { Id = messageId }); await SaveChangesAsync(ct);
+        if (messageId is { } id) MensagensProcessadas.Add(new() { Id = id });
+        await SaveChangesAsync(ct);
     }
     public Task CommitAsync(CancellationToken ct) => Database.CurrentTransaction!.CommitAsync(ct);
 }
