@@ -1,70 +1,137 @@
-# Billing
+# FIAP Tech Challenge — Billing
 
-> Operação AWS atual: ciclo completo centralizado em `manage-platform.yml` no repositório principal. Bancos gerenciados (RDS/DocumentDB), Kafka no EKS, segredos e migrations são provisionados pelo fluxo. Instruções antigas de ações manuais/pré-requisitos avulsos abaixo são históricas; seguir o [guia operacional](https://github.com/Maieru/fiap-tech-challenge/blob/main/docs/operacao/plataforma-aws.md). A aplicação remota ainda exige publicação coordenada, transição e bootstrap.
+Serviço .NET 10 responsável por cobranças e integração de pagamento. Usa PostgreSQL exclusivo, recebe pedidos pelo Kafka e cria checkout hospedado pela API de Orders do Mercado Pago. Clientes, ordens e autorização de execução pertencem ao OS; catálogo, estoque e execução pertencem ao Execution.
 
-Serviço .NET 10 de cobranças, PostgreSQL exclusivo e Kafka. `MercadoPagoPaymentGateway` cria um checkout hospedado e mantém a cobrança pendente até receber o webhook validado. Valor zero é confirmado sem chamada externa. Estorno e novas tentativas após recusa ficam fora deste fluxo.
+## Pré-requisitos
 
-## Fluxo
+- Docker com Compose e containers Linux para executar o ambiente e os testes de integração.
+- .NET SDK 10 para build e testes pelo host. Os exemplos de configuração usam PowerShell 7.
+- Acesso ao NuGet para restaurar dependências. Node.js 22+ é necessário somente para as ferramentas de entrega.
+- Credenciais de teste Mercado Pago e uma URL HTTPS acessível para testar pagamentos positivos e reentrega de webhooks.
 
-OS preserva o total e MessageId do diagnóstico como referência do orçamento. Aprovação administrativa retorna 202 e publica `os.pagamento-solicitado` em `oficina.os.billing.requests.v1`. Billing publica `billing.pagamento-confirmado` ou `billing.pagamento-recusado` em `oficina.billing.events.v1`. Só a confirmação faz OS publicar `os.execucao-autorizada`. Recusa aciona cancelamento no Execution e devolução de estoque; a aprovação original permanece no histórico.
+## Fluxo e limites
 
-Uma cobrança por ordem, valor decimal BRL preservado inclusive zero, sem arredondamento. A chave de idempotência e external_reference do gateway são o UUID da ordem. O grupo Billing é `oficina-billing-v1`. Consumidores confirmam offsets após commit e encerram em falha, sem retry de aplicação ou DLQ. A criação do checkout não publica confirmação/recusa. O webhook conclui sob bloqueio por ordem e publica o evento existente com MessageId igual ao ID da cobrança.
+OS publica `os.pagamento-solicitado` em `oficina.os.billing.requests.v1`. Billing cria uma cobrança por ordem e publica `billing.pagamento-confirmado` ou `billing.pagamento-recusado` em `oficina.billing.events.v1`. O grupo padrão é `oficina-billing-v1`.
 
-## Mercado Pago e credenciais
+Valores são decimais em BRL, inclusive zero. Valor zero confirma sem chamada externa; valor positivo permanece pendente até um webhook válido confirmar o resultado. Criar checkout ou voltar pelo navegador não confirma pagamento. A chave de idempotência externa e `external_reference` usam o UUID da ordem; o evento de resultado usa o ID da cobrança como MessageId.
 
-No repositório principal `Maieru/fiap-tech-challenge`, cadastrar em **Settings → Secrets and variables → Actions** os secrets `MERCADO_PAGO_ACCESS_TOKEN` e `MERCADO_PAGO_WEBHOOK_SECRET` da aplicação de teste. Não enviar os valores em issues, logs ou arquivos versionados. Não é necessária Public Key para abrir o checkout por link.
+Só a confirmação faz OS autorizar Execution. Recusa aciona a compensação e a devolução de estoque, preservando a aprovação administrativa. Não há estorno, nova tentativa comercial após recusa, Outbox, retry de aplicação ou DLQ.
 
-`manage-platform.yml` verifica a presença de ambos e os encaminha explicitamente ao estágio `aws-resources`. Terraform cria `fiap-billing-mercadopago-credentials`; um passo AWS CLI grava o JSON usando arquivo temporário e remove o arquivo ao final. Os valores não passam pelo Terraform. A role do External Secrets do Billing lê esse segredo e injeta `MercadoPago__AccessToken` e `MercadoPago__WebhookSecret` no pod. O deploy aguarda a sincronização e sua anotação de execução provoca novo rollout, inclusive ao reutilizar a imagem. Para trocar credenciais, atualizar os GitHub Secrets e executar `manage-platform.yml` com `apply` novamente. `destroy` não exige credenciais Mercado Pago.
+## Build e dependências
 
-Após o deploy, cadastrar no painel Webhooks da aplicação Mercado Pago, no ambiente de teste, a URL HTTPS `<api_endpoint>/api/billing/v1/webhooks/mercadopago` para notificações de orders do Checkout Pro. O segredo de assinatura desse painel deve ser o mesmo cadastrado no GitHub. A API é `https://api.mercadopago.com`; usar credenciais e comprador/cartão de teste. Abrir uma ordem nova, aprovar seu orçamento, aguardar a cobrança pendente e abrir o link no detalhe administrativo. Após pagar, conferir a confirmação e a autorização da execução. Retornos do navegador não confirmam pagamentos.
-
-O webhook não exige JWT: autentica a assinatura HMAC-SHA256 de `data.id`, `x-request-id` e `ts` de `x-signature`, consulta a order e confere referência/ID/valor/moeda. Responde 401 para assinatura inválida e 503 para falha de processamento ou cobrança ainda indisponível, permitindo reentrega. Notificações repetidas ou atrasadas não alteram cobrança concluída. `processed/accredited` confirma; `failed` e `canceled` recusam; outros estados aguardam. `GatewayPaymentId` armazena o ID da order Mercado Pago.
-
-Orders em `created` podem omitir `status_detail`; a consulta mantém essas cobranças pendentes. A confirmação continua exigindo `processed/accredited`. Em 2026-11-08, a consulta a duas orders de teste confirmou esse formato e motivou uma correção de leitura com quatro testes de regressão.
-
-Se o checkout informar que uma das partes é de teste, verificar também o usuário/e-mail do comprador, mesmo em guia anônima. Para eliminar mistura com conta real, criar uma conta **Comprador** de teste no Brasil pelo painel da aplicação e usar seus dados no checkout, conforme a [documentação de contas de teste](https://www.mercadopago.com.br/developers/pt/docs/checkout-pro-orders/resources/your-integrations/test/accounts?scope=prod). O Access Token de teste desta integração pode começar com `APP_USR`; o prefixo sozinho não identifica produção.
-
-## Pacotes candidatos e build
-
-Os contratos OS 0.2.0 e Billing 0.1.0 devem ser publicados antes dos builds independentes em CI. Não foram publicados automaticamente nesta implementação. Para revisar antes da publicação:
+Execute na raiz:
 
 ```powershell
-./scripts/Restore-Local.ps1 -OsMessagingPackage <caminho-absoluto-do-OS.0.2.0.nupkg>
-dotnet build Billing.slnx --no-restore
-dotnet test Billing.slnx --no-restore --filter 'TestCategory!=ContainerImage'
-docker build -t fiap-billing:local .
+dotnet restore Billing.slnx
+dotnet build Billing.slnx -c Release --no-restore
 ```
 
-O Dockerfile aceita candidatos em `artifacts/packages` e restaura do NuGet público quando publicados. O OS também precisa do nupkg Billing 0.1.0 no seu `artifacts/packages` durante a revisão. Não há referências de projetos entre repositórios.
+Os contratos OS usados pelo Billing são `FIAP.TechChallenge.OS.Application.Messaging` 0.2.0. O produtor Billing mantém seu contrato 0.1.0 no próprio repositório. As dependências entre serviços são NuGet, sem referências a projetos externos.
 
-## Execução
+Para avaliar um pacote OS candidato da versão exigida antes de disponibilizá-lo no feed:
 
-Copie `.env.example` para `.env` e preencha senha do banco, JWT e credenciais Mercado Pago de teste. `docker compose up -d` usa a imagem `fiap-billing:local`, API em loopback 8083 e broker 19094, volumes exclusivos. `docker compose down` preserva dados. O Compose integrado do Execution inclui as três APIs com broker compartilhado; preencha também BILLING_DB_PASSWORD e forneça as três imagens prontas. Webhooks externos precisam da URL HTTPS acessível da aplicação; o endereço loopback do Compose não é público.
+```powershell
+./scripts/Restore-Local.ps1 -OsMessagingPackage '<caminho-absoluto-do-nupkg-OS-0.2.0>'
+```
 
-JWT exige issuer/audience e `Jwt__SigningKey` de pelo menos 32 bytes, exclusivamente por variável de ambiente. Fora do Compose configure `ConnectionStrings__DefaultConnection`, `Kafka__BootstrapServers`, `Jwt__Issuer`, `Jwt__Audience`, `Jwt__SigningKey`. `Database__ApplyMigrations=true` aplica migrations ao iniciar (ambiente de demonstração).
+O script copia o pacote para `artifacts/packages` e gera configuração local ignorada pelo Git. O Dockerfile também aceita candidatos nessa pasta. Build com feed local não comprova restore em um runner limpo.
 
-GET autenticados: `/api/billing/v1/cobrancas`, `/api/billing/v1/cobrancas/{id}` e `/api/billing/v1/ordens/{ordemServicoId}/cobranca`. Lista aceita `ordemServicoId`, `situacao`, `pageNumber=1`, `pageSize=10` (máximo 100). Criação somente por Kafka. OpenAPI `/openapi/v1.json` e Scalar `/scalar/v1` em Development/Testing. Health em `/api/billing/v1/health/live` e `/ready`, incluindo banco, consumidor e broker.
+## Execução local isolada
 
-## Kubernetes / EKS
+Em um checkout novo, copie o exemplo e preencha o `.env`. Preserve configurações existentes.
 
-As Actions manuais [publish-image.yml e deploy-eks.yml](scripts/delivery/README.md) publicam no ECR e aplicam os manifestos no EKS, em main com CI aprovado. A publicação usa tag por commit e o deploy usa digest; configure as roles OIDC e variáveis conforme o guia.
+```powershell
+Copy-Item .env.example .env
+docker build -t fiap-billing:local .
+docker compose up -d
+```
 
-Os [manifestos e o roteiro manual](k8s/README.md) configuram HTTP interno 8080, HPA de 1 a 3 réplicas, credencial PostgreSQL exclusiva e OTLP ativo para o Collector compartilhado. Namespace/SecretStore pertencem ao Infra. As migrations devem ser aplicadas antes do rollout; `Database__ApplyMigrations=false` nas réplicas. Bancos, Kafka, segredos/IAM, imagens e deploy são etapas externas.
+O Compose usa uma imagem pronta: não contém `build` para a API. Recrie a imagem ao alterar o código. `BILLING_IMAGE` permite selecionar outra referência.
+
+| Variável no .env | Uso |
+| --- | --- |
+| `BILLING_DB_PASSWORD` | Senha do PostgreSQL local |
+| `JWT_ISSUER` e `JWT_AUDIENCE` | Iguais aos do OS que emite o token |
+| `JWT_SIGNING_KEY` | Chave compartilhada, com pelo menos 32 bytes UTF-8 |
+| `MERCADO_PAGO_ACCESS_TOKEN` | Token de teste para pedidos de valor positivo |
+| `MERCADO_PAGO_WEBHOOK_SECRET` | Segredo de assinatura dos webhooks |
+
+A API fica em [localhost:8083](http://localhost:8083), Kafka em `127.0.0.1:19094` e o banco só na rede Compose. Há dois tópicos Billing e volumes próprios. Este broker não está ligado ao OS: um teste de negócio completo exige a stack integrada.
+
+```powershell
+docker compose ps -a
+docker compose logs -f billing-api
+docker compose down
+```
+
+`down` preserva os dados; `down -v` os exclui. Alterar a senha no .env não atualiza um usuário em volume já inicializado. Sem credenciais Mercado Pago, a API pode iniciar e processar valor zero, mas uma cobrança positiva falha; corrija a causa antes de reiniciar o consumidor.
+
+Para executar pelo SDK, configure `ConnectionStrings__DefaultConnection`, `Kafka__BootstrapServers`, `Jwt__Issuer`, `Jwt__Audience` e `Jwt__SigningKey` no processo. A chave JWT vem de variável de ambiente. O processo não carrega automaticamente o .env do Compose. Para demonstrar migrations no startup, defina `Database__ApplyMigrations=true`; para abrir Scalar, use Development:
+
+```powershell
+$env:ASPNETCORE_ENVIRONMENT = 'Development'
+dotnet run --project src/FIAP.TechChallenge.Billing.API --no-launch-profile --urls http://localhost:8083
+```
+
+O PostgreSQL deste Compose não publica porta no host. Para esse modo, forneça uma instância acessível pelo host e schema preparado, ou publique a porta em uma configuração local própria.
+
+## Stack integrada
+
+O ponto de entrada com frontend é o [repositório OS](https://github.com/Maieru/fiap-tech-challenge#subir-os-execution-e-billing), com OS, Execution e Billing lado a lado. O complemento `compose.integrated.yaml` do Execution também aceita imagens OS/Billing prontas e repassa as credenciais de pagamento. Não execute stacks que disputem 8081–8083 ou 19094 simultaneamente.
+
+O OS faz cadastro/login em `/api/os/v1/usuarios` e `/api/os/v1/usuarios/login`. Billing apenas valida o JWT; não oferece login próprio.
+
+## HTTP, saúde e autenticação
+
+| Método e rota | Acesso |
+| --- | --- |
+| GET `/api/billing/v1/cobrancas` | JWT; filtros `ordemServicoId`, `situacao`, `pageNumber` e `pageSize` |
+| GET `/api/billing/v1/cobrancas/{id}` | JWT |
+| GET `/api/billing/v1/ordens/{ordemServicoId}/cobranca` | JWT |
+| POST `/api/billing/v1/webhooks/mercadopago` | Assinatura Mercado Pago; sem JWT |
+| GET `/api/billing/v1/health/live` | Público; processo ativo |
+| GET `/api/billing/v1/health/ready` | Público; banco, consumidor e broker |
+
+Paginação padrão 1/10, pageSize máximo 100. A criação de cobrança ocorre somente por Kafka. Em Development/Testing, [Scalar](http://localhost:8083/scalar/v1) e [OpenAPI](http://localhost:8083/openapi/v1.json) expõem o contrato.
+
+## Mercado Pago e webhooks
+
+A implementação usa `POST /v1/orders` e `GET /v1/orders/{id}` em `https://api.mercadopago.com/`. A URL de checkout retornada é validada como HTTPS em `www.mercadopago.com.br`. Configure credenciais e comprador de teste conforme o ambiente da aplicação Mercado Pago; não publique tokens ou assinaturas em logs/arquivos versionados.
+
+Cadastre a URL HTTPS `<origem-publica>/api/billing/v1/webhooks/mercadopago` para eventos de order. O handler espera `type=order` e `data.id` na query, além de `x-request-id` e `x-signature`. Um endereço loopback de Compose não é acessível ao provedor; a borda deve preservar esses parâmetros e headers.
+
+O handler valida HMAC-SHA256, consulta a order e confere referência, ID, valor e moeda. Assinatura inválida retorna 401; falha de processamento ou cobrança ainda indisponível retorna 503 para permitir reentrega. `processed/accredited` confirma; `failed` e `canceled` recusam; outros estados aguardam, inclusive `created` sem `status_detail`. Notificações repetidas não alteram uma cobrança concluída. `GatewayPaymentId` guarda o ID da order.
+
+Na AWS, cadastre `MERCADO_PAGO_ACCESS_TOKEN` e `MERCADO_PAGO_WEBHOOK_SECRET` como GitHub Secrets do repositório principal. O fluxo central grava o JSON em `fiap-billing-mercadopago-credentials` via AWS CLI, fora das variáveis/versões de segredo Terraform; External Secrets injeta os valores no pod. Rotação exige novo apply e rollout. Consulte o [guia AWS](https://github.com/Maieru/fiap-tech-challenge/blob/main/docs/operacao/plataforma-aws.md).
+
+## Testes e CI
+
+```powershell
+dotnet test Billing.slnx -c Release --no-build --no-restore --filter 'TestCategory!=ContainerImage'
+docker build -t fiap-billing:local .
+$env:BILLING_TEST_IMAGE = 'fiap-billing:local'
+dotnet test tests/FIAP.TechChallenge.Billing.Tests -c Release --no-build --no-restore --filter 'TestCategory=ContainerImage'
+```
+
+Integrações usam PostgreSQL e Kafka reais em containers descartáveis; testes do gateway usam fixtures HTTP, sem compra externa. Testes de imagem exigem Docker e a imagem indicada. A suíte distribuída do Execution exige `OS_TEST_IMAGE`, `EXECUTION_TEST_IMAGE` e `BILLING_TEST_IMAGE` e simula o provedor por HTTP/webhook assinado.
+
+CI verifica ferramentas de entrega, build, testes, cobertura mínima de 80%, imagem, OpenAPI e Sonar. Configure `SONAR_TOKEN` e `SONAR_PROJECT_KEY` conforme o workflow. O contrato é publicado por tag `messaging-vX.Y.Z` em main, com `NUGET_USER` e Trusted Publishing; verifique disponibilidade no feed antes de atualizar consumidores.
+
+## Entrega e operação AWS
+
+`manage-platform.yml` do principal chama os workflows reutilizáveis `publish-image.yml` e `deploy-eks.yml`; eles não têm disparo manual independente. A entrega exige CI aprovado e usa SHA explícito e imagem por digest. O [guia de entrega](scripts/delivery/README.md) descreve o contrato.
+
+[Kubernetes](k8s/README.md) usa HTTP interno 8080, HPA de 1 a 3 réplicas e credenciais exclusivas. O fluxo aguarda ExternalSecrets e aplica migrations por Job `--migrate-only` antes do rollout; pods normais usam `Database__ApplyMigrations=false`. O laboratório tem destruição diária de dados; configuração e validação local não comprovam implantação remota.
 
 ## Falhas e reconciliação
 
-Persistir → publicar → commit não é atômico entre PostgreSQL e Kafka. A criação externa pode ter concluído antes do rollback local: a reentrega reutiliza a mesma chave de idempotência. Na conclusão, falha de commit depois da publicação pode repetir o evento; o MessageId permanece estável para deduplicação. Mensagem órfã ou entrega incerta exige verificar produtor, consumidor e log Kafka, corrigir a causa e reiniciar no mesmo grupo. Preservar envelope e chave no reenvio. Não avançar offsets silenciosamente nem presumir que houve rollback externo.
+Persistir → publicar → commit não é atômico entre PostgreSQL e Kafka. Criação externa pode concluir antes de rollback local; a reentrega reutiliza a chave de idempotência. Publicação anterior a falha de commit pode repetir o evento, cujo MessageId permanece estável.
 
-A migração é aditiva e não cobra ordens antigas. Ordens sem referência e total de orçamento não podem iniciar pagamento. Para demonstração use ordens novas; drene autorizações antigas antes de trocar as imagens. Não faça downgrade com Sagas em andamento.
+Em falha, consulte `docker compose logs billing-api` ou os logs do pod, corrija dependências/configuração e reinicie no mesmo grupo. Preserve envelope e chave no reenvio, não avance offsets silenciosamente e não presuma rollback do gateway. Uma cobrança 404 logo após aprovação pode ser propagação pendente; falha persistente exige diagnóstico. Ordens sem referência/total de orçamento não iniciam pagamento.
 
-BDD: no repositório Execution, configure OS_TEST_IMAGE, EXECUTION_TEST_IMAGE e BILLING_TEST_IMAGE e rode `dotnet test Distributed.slnx`. Bancos, tópicos e redes dos testes são descartáveis; não usar volumes de desenvolvimento. CI exige cobertura de linhas 80%, imagem, OpenAPI e Sonar (SONAR_TOKEN e SONAR_PROJECT_KEY).
+## Código e documentação
 
-## Organização do código
+`src` contém Domain, Application, Application.Messaging, Infrastructure e API; `tests` contém contratos, unidades, integração e imagem. Infraestrutura implementa persistência, consumidor e gateway; controllers delegam aos casos de uso.
 
-- `Domain/Entities`, `Enums` e `Interfaces`: cobrança, situação e contrato de consulta.
-- `Application/UseCases/Cobrancas/<Operacao>`: caso de uso, interface e command por operação; listagem também tem response próprio. `Abstractions` contém a persistência transacional e `Gateways` contém o contrato de pagamento e seus DTOs.
-- `Infrastructure/Persistence`: contexto, entidades técnicas, migrations e repositórios; `Messaging` contém o consumidor Kafka; `Payments` contém o gateway HTTP Mercado Pago e a validação de assinatura.
-- `API/Controllers`: rotas de cobrança delegando aos casos de uso. `Program` compõe o host com `AddApplication` e `AddInfrastructure`.
-- Os testes permanecem na pasta `Tests` da solução, organizados por domínio, infraestrutura, integração e imagens dentro do projeto existente.
-
-A [documentação da Saga](https://github.com/Maieru/fiap-tech-challenge/blob/main/docs/arquitetura/saga-pagamento.md) detalha etapas, mensagens e compensação. A [revisão](https://github.com/Maieru/fiap-tech-challenge/blob/main/docs/operacao/revisao-billing-saga.md) registra as lacunas conhecidas e as evidências.
+- [Saga e compensação](https://github.com/Maieru/fiap-tech-challenge/blob/main/docs/arquitetura/saga-pagamento.md).
+- [Padrão de mensageria](https://github.com/Maieru/fiap-tech-challenge/blob/main/docs/arquitetura/mensageria.md).
